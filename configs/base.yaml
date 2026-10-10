@@ -1,0 +1,175 @@
+# Shared defaults. Other configs inherit them with `_base_: base.yaml` and only
+# override what they need.
+
+model:
+  type: qwen3_vl_embedding     # qwen3_vl_embedding | jina_clip (see the backbone configs)
+  pooling: last_token          # last_token | mean | cls | weighted_mean | max
+  normalize: true              # L2-normalize outputs (required for cosine-similarity InfoNCE)
+  embed_dim: null              # null = use hidden_size; an integer adds a linear projection
+  dtype: bfloat16
+  attn_implementation: sdpa    # use flash_attention_2 if flash-attn is installed
+  gradient_checkpointing: true
+  hidden_states_from: inner    # inner = only run up to the hidden states (saves memory); full = full model
+  drop_lm_head: true
+  max_text_tokens: 512         # truncate raw text by tokens before applying the chat template (keeps image tokens intact)
+  padding_side: left
+  freeze_vision: false
+  lora:
+    enable: false
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+    exclude_regex: "visual|vision_tower"   # never attach LoRA to the vision tower
+  image:
+    min_pixels: 200704         # 256*28*28, lower bound of image tokens
+    max_pixels: 1003520        # 1280*28*28, upper bound of image tokens (main memory knob)
+  prompt:
+    query_instruction: "Represent the user's query for retrieving relevant content."
+    doc_instruction: "Represent the candidate content for retrieval."
+    use_system_role: true
+    add_generation_prompt: true
+    suffix: null
+
+loss:
+  # --------------------------------------------------------------------
+  # Core loss parameters (flat)
+  # --------------------------------------------------------------------
+  type: infonce
+  temperature: 0.02
+  learnable_temperature: false
+  use_inbatch_negatives: true
+  inbatch_scope: all           # all | positives_only
+  symmetric: false
+  symmetric_weight: 0.5        # only with symmetric=true: weight of the d->q direction
+  label_smoothing: 0.0
+  multi_positive_reduction: mean   # mean = average log-prob over positives | joint = only the total positive mass
+
+  # --------------------------------------------------------------------
+  # Optional modules, all with the same layout:
+  #   enable  -- switch; false = not constructed at all, zero overhead
+  #   others  -- the module's own parameters
+  # See mmemb/losses/spec.py for all fields; a summary table of the effective
+  # settings is printed at startup.
+  # --------------------------------------------------------------------
+  modules:
+    # False-negative masking: remove in-batch / cross-GPU candidates that are actually
+    # my positives from the denominator. This differs from data.avoid_related_negatives,
+    # which only affects the hard negatives sampled for the row itself.
+    false_negative:
+      enable: true
+      mask_positive_ids: true      # candidate doc_id ∈ my positive_ids (main rule)
+      mask_same_group: true        # candidate shares my group_id (exclusive cluster)
+      mask_by_query_id: true       # symmetric direction: candidate query has my query_id
+      mask_same_example: true      # sibling view groups split from the same row (required for view_strategy=chunk)
+      # true : each positive is normalized independently (other positives of the same
+      #        sample are removed from its denominator)
+      # false: all positive views share one softmax denominator, i.e. the
+      #        Multi-Positive View InfoNCE of the paper (Eq. 4). The Trident configs set false.
+      mask_sibling_positives: true
+
+    # Matryoshka training over several dims (truncatable embeddings). Off by default.
+    matryoshka:
+      enable: false
+      dims: null                   # e.g. [256, 512, 1024]
+      weights: null                # equal weights if omitted
+
+data:
+  type: jsonl
+  train_path: null
+  eval_path: null
+  eval_use_all_views: true     # evaluate with all views (true) or truncate to k (false)
+  image_root: ""
+  num_negatives: 3             # hard negatives per sample; 0 = in-batch negatives only
+  negative_strategy: shuffle   # shuffle | topk | random_pool
+  negative_fill: random_pool   # how to fill missing hard negatives: random_pool | repeat | drop
+  # ---- multi-view negatives (a hard negative returns all views of its row) ----
+  multiview_negatives: false      # true: a hard negative returns all Np views of its row as one group
+                                  # false: a single view (default)
+                                  # note: true multiplies memory by (1+Nneg); reduce the batch size accordingly
+  # ---- identity fields (foundation of false-negative masking) ----
+  auto_ids: true               # fall back to a content hash of "text + image paths" for missing doc_id / query_id
+  canonicalize_doc_ids: true   # merge "same content, different id" and "same id, different views" into one doc_id
+  auto_positive_ids: true      # scan the whole file to collect query_id -> all relevant doc_ids (non-transitive)
+  avoid_related_negatives: true # random_pool negatives skip documents known to be related to the query
+  collect_identity: true       # whether the collator outputs identity info (false disables all masking)
+  task_instructions: {}        # {task_name: {query: "...", doc: "..."}}
+                               # per-modality keys are also supported: query_text / query_image / doc_text / doc_image
+  # Multi-view / multi-positive (core settings)
+  multiview_k: null            # block size: 2 (2x2) / 3 (3x3) / 4 (4x4) ... = sets both values below
+  num_query_views: 1           # query views per sample (default 1 = single view)
+                               # priority: multiview_k > num_query_views > 1
+  num_positives: 1             # positive views per sample (default 1)
+  view_strategy: first         # what to do when the number of views differs from k:
+                               # - first: take the first k (drops M-k when M > k)
+                               # - shuffle: take k at random (changes every epoch)
+                               # - chunk: split into groups, one sample per group (M views -> ceil(M/k) samples)
+                               # - shuffle_chunk: shuffle, then chunk (full coverage + diverse combinations)
+  view_pad: mask               # how to pad when there are fewer than k views:
+                               # - mask: the collator duplicates views and masks them out of the loss
+                               # - cycle: cycle through the sample's own views (counted as valid views)
+  max_view_groups: -1          # max groups expanded per sample with chunk / shuffle_chunk (-1 = unlimited)
+  dedupe_records: false        # view padding creates duplicate Records; dedup saves their forward passes
+
+  # ---- lexical hard-negative mining + difficulty curriculum (optional, off; not used in the paper) ----
+  # Mine hard negatives offline by lexical overlap of the positive text slot, then move from
+  # "somewhat similar" to "most similar" as training progresses.
+  # Before enabling:
+  #    1) num_negatives must be > 0, otherwise there are no negative slots (memory grows too)
+  #    2) the hardest mined pairs are printed at startup; **verify they are truly irrelevant**
+  hard_negatives:
+    enable: false
+    text_view_index: 0         # which positive view is the text-only document (0 in the 1x3 layout)
+                               # requires view_strategy first / chunk (spot-checked at startup)
+    top_k: 50                  # candidates mined per row (the curriculum slides over their ranks)
+    window: 10                 # rank window width per stage
+    schedule: linear           # linear | cosine
+    warmup_ratio: 0.0          # fraction of steps before difficulty starts increasing
+    mix_init: 0.3              # initial share of negative slots filled with mined negatives
+    mix_final: 1.0             # final share (the rest keeps the original sources for diversity)
+    min_similarity: 0.05       # below this a pair is not "hard"; left to random negatives
+    max_similarity: 0.9        # above this a pair is treated as a likely duplicate, not a negative
+    max_df_ratio: 0.3          # drop tokens whose document frequency exceeds this ratio (stop / template words)
+    # ---- mining speed (defaults already use the fast path; ~30s for 100k rows) ----
+    similarity: f1             # f1 (weighted Dice, default) | cosine (idf cosine)
+    block_size: 0              # >0 = block-wise mining, pairs only within a block; cost O(N x block_size)
+                               # 2000-8000 recommended; required above ~100k rows, otherwise O(N^2)
+    block_assign: signature    # signature (group by rarest token, higher recall) | random | none
+    block_rounds: 1            # re-mine with different blockings (2 rounds: much higher recall, 2x cost)
+    query_chunk: 2048          # rows per matmul; reduce to save memory
+    min_df: 2                  # tokens with df=1 are not put in the matrix (they never contribute for i≠j)
+    backend: auto              # auto (scipy if available) | scipy | python
+    seed: 0                    # random seed of the blocking
+    negative_view: slot        # which view of a mined negative is used:
+                               # slot   = always the text-only view at text_view_index
+                               # random = a random view, matching the modality distribution of positives
+    cache_dir: null            # cache directory of mining results (invalidated when corpus / params change)
+    preview: true              # print the hardest pairs at startup for manual checking
+    preview_pairs: 5
+    total_steps: auto          # curriculum length; auto = Trainer max_steps
+
+engine:
+  cross_device: grad           # grad = cross-GPU negatives with gradients | detach = without gradients | off = local only
+  eval_k_list: [1, 5, 10]
+  eval_dim: null
+
+train:                         # passed to transformers.TrainingArguments as is
+  output_dir: outputs/run
+  num_train_epochs: 1
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-5
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  logging_steps: 10
+  save_strategy: epoch
+  save_total_limit: 2
+  eval_strategy: epoch         # renamed automatically for transformers < 4.41 (evaluation_strategy)
+  dataloader_num_workers: 4
+  ddp_find_unused_parameters: false
+  report_to: [tensorboard]
+  seed: 42

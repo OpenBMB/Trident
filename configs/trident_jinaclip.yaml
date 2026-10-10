@@ -1,0 +1,103 @@
+# ============================================================
+# Trident-JinaCLIP (Table 1 / Table 4 of the paper)
+#
+#   Backbone : jina-clip-v2 (dual tower), full-parameter fine-tuning of both towers;
+#              fused documents = 0.5 / 0.5 weighted sum of text and image embeddings
+#   Objective: Multi-Positive View InfoNCE (Eq. 4) over the three positive views
+#
+#   torchrun --nproc_per_node 8 src/train.py --config configs/trident_jinaclip.yaml
+#
+# Differences from trident_qwen3vl.yaml beyond model.type:
+#   * no instruction (jina-clip-v2 is not instruction-tuned; Table 2);
+#   * full-parameter training instead of LoRA, trainable vision tower;
+#   * temperature 0.05 (0.02 tends to be unstable for this backbone).
+# ============================================================
+_base_: base.yaml
+
+model:
+  type: jina_clip
+  pretrained_model_name_or_path: jinaai/jina-clip-v2
+  trust_remote_code: true      # required: jina-clip is implemented as Hub remote code
+  # code_revision: <commit-sha> # optionally pin the remote-code revision for reproducibility
+
+  normalize: true
+  embed_dim: null              # null = native 1024-d; an integer adds a projection head (non-standard checkpoint)
+  truncate_dim: null           # MRL truncation: 32/64/128/256/512/768/1024, null = none
+  dtype: bfloat16
+  # attn_implementation: do **not** set it; jina-clip does not support this argument
+  # (flash-attn / xformers are enabled automatically when installed).
+  gradient_checkpointing: true # text tower only (EVA-02 vision tower is incompatible with checkpointing)
+
+  # ---- text tower (jina-XLM-RoBERTa, RoPE 8k) ----
+  max_length: 8192             # Table 2: max text length 8192
+  padding: longest             # the text tower derives its mask from pad_token_id; no fixed-length padding needed
+  use_instruction: false       # Table 2: no instruction
+
+  # ---- vision tower (EVA-02, 512x512) ----
+  image:
+    max_images_per_record: 1   # images per Record (several images are averaged after normalization)
+    patch_dropout: 0.0         # >0 randomly drops patches during training (memory / speed knob)
+  freeze_vision: false         # Table 2: trainable vision tower
+  freeze_text: false
+
+  # ---- text-image fusion (added by this framework; jina-clip has no native fusion) ----
+  fusion: sum                  # sum | mean | text_only | image_only
+  fusion_text_weight: 0.5      # Table 2: embedding fusion (0.5 / 0.5)
+  keep_towers_alive: true      # forward a dummy image in text-only batches to avoid DDP unused-parameter errors
+
+  lora:
+    enable: false              # Table 2: full-parameter fine-tuning
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    # empty = default union of both towers' Linear names (see mmemb/models/jina_clip.py)
+    #   text tower : Wqkv / out_proj / fc1 / fc2
+    #   vision tower: qkv (or q_proj/k_proj/v_proj) / proj / w1 / w2 / w3
+    target_modules: null
+    towers: [text, vision]     # use [text] or [vision] to adapt a single tower
+    merge_on_save: true
+
+loss:
+  type: infonce
+  temperature: 0.05
+  use_inbatch_negatives: true
+  inbatch_scope: all
+  symmetric: true
+  multi_positive_reduction: mean
+
+  modules:
+    false_negative:
+      enable: true
+      # Multi-Positive View InfoNCE (Eq. 4): shared softmax denominator over all views.
+      mask_sibling_positives: false
+
+data:
+  train_path: data/train/train.jsonl
+  eval_path: null              # optional dev set in the same format
+  image_root: data/images
+  num_negatives: 0
+  multiview_k: null
+  num_query_views: 1
+  num_positives: 3
+  dedupe_records: true
+  task_instructions: {}        # consistent with model.use_instruction=false
+
+engine:
+  cross_device: grad
+
+train:                         # Table 3 of the paper
+  output_dir: outputs/trident_jinaclip
+  num_train_epochs: 1
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 2
+  learning_rate: 1.0e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  logging_steps: 1
+  save_strategy: steps
+  save_steps: 200
+  save_total_limit: 1
+  ddp_find_unused_parameters: false  # fine with keep_towers_alive=true

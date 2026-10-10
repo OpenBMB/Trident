@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.DS_Store
+
+# outputs
+outputs/
+checkpoints/
+wandb/
+runs/
+
+# data (only the download script is tracked)
+data/*
+!data/download_data.sh
+
+# official Qwen3-VL-Embedding script (downloaded separately for the qwen3vl_official baseline)
+src/qwen3_vl_embedding.py

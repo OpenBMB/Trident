@@ -1,0 +1,118 @@
+# ============================================================
+# Trident-Qwen3VL-2B (Table 1 / Table 4 of the paper)
+#
+#   Backbone : Qwen3-VL-2B-Instruct, reusing the official Qwen3-VL-Embedding
+#              model definition (last-token pooling, Figure 13 instruction template)
+#   Objective: Multi-Positive View InfoNCE (Eq. 4) over the three positive views
+#              (text / image / fused) of each document
+#
+#   torchrun --nproc_per_node 8 src/train.py --config configs/trident_qwen3vl.yaml
+#
+# Trained checkpoints can be loaded with AutoModel.from_pretrained(..., trust_remote_code=True)
+# (after merging LoRA, see model.lora.merge_on_save).
+#
+# Data format (one JSON object per line; see README "Data Preparation"):
+# {"query":    [{"text": "..."}],
+#  "positive": [{"text": "<detailed description>", "id": "d1_txt"},
+#               {"image": "chartqa/d1.png", "id": "d1_img"},
+#               {"text": "<summary>", "image": "chartqa/d1.png", "id": "d1_fused"}],
+#  "doc_id": "d1", "task": "default"}
+#
+# Memory: with Np=3 each step encodes B queries + B*3 docs; reduce
+# per_device_train_batch_size if needed.
+# ============================================================
+_base_: base.yaml
+
+model:
+  type: qwen3_vl_embedding
+  pretrained_model_name_or_path: Qwen/Qwen3-VL-2B-Instruct
+
+  pooling: last_token          # same as the official Qwen3-VL-Embedding; do not change
+  normalize: true
+  embed_dim: null              # must be null: a projection head is not part of the HF weights
+  dtype: bfloat16
+  attn_implementation: sdpa    # use flash_attention_2 if flash-attn is installed
+  gradient_checkpointing: true
+
+  padding_side: right          # same as the official Qwen3VLEmbedder (last-token pooling works with both)
+  add_generation_prompt: true  # appends `<|im_start|>assistant\n`, the pooling anchor
+  max_length: 8192             # truncation limit for text-only batches (official MAX_LENGTH)
+  max_text_tokens: 4096        # with images, text is truncated by tokens first so image tokens stay intact
+
+  use_qwen_vl_utils: true      # use the official vision preprocessing if qwen-vl-utils is installed (pixel-identical)
+  freeze_vision: true          # Table 2: vision tower frozen, LoRA on the language tower only
+
+  image:
+    min_pixels: 262144         # 256 * 32 * 32   (official MIN_PIXELS)
+    max_pixels: 1310720        # 1280 * 32 * 32  (official MAX_PIXELS); reduce first if out of memory
+  video:
+    fps: 1
+    max_frames: 64
+    total_pixels: 7864320      # 10 * 768 * 32 * 32
+
+  lora:
+    enable: true
+    r: 32                      # Table 2: LoRA (r=32, alpha=64)
+    alpha: 64
+    dropout: 0.05
+    exclude_regex: "visual|vision_tower"   # never attach LoRA to the vision tower
+    merge_on_save: false       # true = merge into full HF weights when saving (checkpoint usable out of the box)
+
+  # Fallback instructions on the encoder side (normally unused because the dataset
+  # injects data.task_instructions)
+  prompt:
+    query_instruction: "Represent the query for retrieving relevant content."
+    doc_instruction: "Represent the candidate content for retrieval."
+
+loss:
+  type: infonce
+  learnable_temperature: false
+  temperature: 0.02
+  use_inbatch_negatives: true
+  inbatch_scope: all
+  symmetric: true
+  multi_positive_reduction: mean
+
+  modules:
+    false_negative:
+      enable: true
+      # Multi-Positive View InfoNCE (Eq. 4): the three positive views and all in-batch
+      # negatives share one softmax denominator.
+      mask_sibling_positives: false
+    matryoshka:
+      enable: false
+      dims: [128, 256, 512, 1024, 2048]
+
+data:
+  train_path: data/train/train.jsonl
+  eval_path: null              # optional dev set in the same format (in-training retrieval metrics)
+  image_root: data/images
+  num_negatives: 0             # in-batch (cross-GPU) negatives only
+  multiview_k: null
+  num_query_views: 1
+  num_positives: 3             # three positive views per sample (text / image / fused)
+  view_strategy: first
+  dedupe_records: true
+  task_instructions:           # Figure 13 of the paper
+    default:
+      query: "Represent the query for retrieving relevant content."
+      doc: "Represent the candidate content for retrieval."
+
+engine:
+  cross_device: grad           # cross-GPU negative sharing with gradients
+
+train:                         # Table 3 of the paper
+  output_dir: outputs/trident_qwen3vl_2b
+  num_train_epochs: 1
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 2
+  learning_rate: 1.0e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  logging_steps: 5
+  save_strategy: steps
+  save_steps: 100
+  save_total_limit: 5

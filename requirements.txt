@@ -1,0 +1,38 @@
+# Python >= 3.10 (tested with 3.11 / 3.12). Install a CUDA build of PyTorch that
+# matches your driver first if the default wheel does not fit your system:
+#   https://pytorch.org/get-started/locally/
+torch>=2.6,<2.11
+torchvision>=0.21
+
+# transformers 4.57.x is required: Qwen3-VL was added in 4.57, and the jina-clip-v2
+# remote code is not yet compatible with transformers 5.x.
+transformers==4.57.1
+tokenizers>=0.22,<0.23
+accelerate>=1.10
+peft>=0.17
+safetensors>=0.4.3
+huggingface_hub>=0.34,<1.0
+
+# Qwen3-VL vision preprocessing (pixel-identical to the official inference)
+qwen-vl-utils==0.0.14
+# jina-clip-v2 remote code (EVA-02 vision tower / XLM-RoBERTa text tower)
+timm>=1.0.15
+einops>=0.8
+
+numpy>=1.26
+scipy>=1.11
+pillow>=10.0
+pyyaml>=6.0
+tqdm>=4.66
+sentencepiece>=0.2
+protobuf>=4.25
+
+# logging and result tables
+tensorboard>=2.16
+openpyxl>=3.1
+
+# Optional:
+#   flash-attn                      # faster attention (set model.attn_implementation: flash_attention_2); install it if training Trident-jinaclip runs out of GPU memory
+#   xformers                        # memory-efficient attention for the jina-clip vision tower
+#   wandb                           # experiment tracking (monitor.wandb.enable: true)
+#   modelscope                      # baselines unime_phi35v / visrag_ret (see README)
