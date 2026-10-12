@@ -84,9 +84,9 @@ loss:
       dims: [128, 256, 512, 1024, 2048]
 
 data:
-  train_path: data/train/train.jsonl
+  train_path: data/Train/train_all.jsonl
   eval_path: null              # optional dev set in the same format (in-training retrieval metrics)
-  image_root: data/images
+  image_root: data/Train/images
   num_negatives: 0             # in-batch (cross-GPU) negatives only
   multiview_k: null
   num_query_views: 1

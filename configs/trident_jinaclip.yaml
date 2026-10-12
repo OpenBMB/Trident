@@ -72,9 +72,9 @@ loss:
       mask_sibling_positives: false
 
 data:
-  train_path: data/train/train.jsonl
-  eval_path: null              # optional dev set in the same format
-  image_root: data/images
+  train_path: data/Train/train_all.jsonl
+  eval_path: null              # optional dev set in the same format (in-training retrieval metrics)
+  image_root: data/Train/images
   num_negatives: 0
   multiview_k: null
   num_query_views: 1
