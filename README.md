@@ -3,8 +3,8 @@
 <p align="center">
   Official code for <a href="https://arxiv.org/abs/2610.11816"><i>Chaos in the Text: Revealing the Modality Preference in Mixed-Modality Retrievers</i></a>
 </p>
-
 <p align="center">
+  <a href="https://chaos-in-texts.github.io/"><img src="https://img.shields.io/badge/%F0%9F%94%B1%20Project%20Page-chaos--in--texts-5b3fd1.svg" alt="Project Page"></a>
   <a href="https://arxiv.org/abs/2610.11816"><img src="https://img.shields.io/badge/arXiv-2610.11816-b31b1b.svg" alt="arXiv"></a>
   <a href="https://github.com/OpenBMB/Trident"><img src="https://img.shields.io/badge/GitHub-OpenBMB%2FTrident-blue.svg" alt="Code"></a>
   <a href="https://huggingface.co/OpenBMB/Trident-Qwen3VL-2B"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Model-Trident--Qwen3VL--2B-yellow.svg" alt="Model"></a>
@@ -12,6 +12,7 @@
   <a href="https://huggingface.co/datasets/OpenBMB/Trident-Eval"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Data-Trident--Eval-orange.svg" alt="Eval data"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
 </p>
+
 
 ## News
 
@@ -315,11 +316,10 @@ The code in this repository is released under the [MIT License](LICENSE). The re
 If you find this work useful, please cite:
 
 ```bibtex
-@article{trident2026chaos,
-  title   = {Chaos in the Text: Revealing the Modality Preference in Mixed-Modality Retrievers},
-  author  = {Sun, Yubo and Peng, Chunyi and Yan, Yukun and Liu, Zhenghao and Xu, Zhipeng and Mei, Sen and Xin, Linlin and Zeng, Zheni and Sun, Maosong},
-  journal = {arXiv preprint arXiv:2610.11816},
-  year    = {2026},
-  url     = {https://arxiv.org/abs/2610.11816}
+@article{sun2026chaos,
+  title={Chaos in the Text: Revealing the Modality Preference in Mixed-Modality Retrievers},
+  author={Sun, Yubo and Peng, Chunyi and Yan, Yukun and Liu, Zhenghao and Xu, Zhipeng and Mei, Sen and Xin, Linlin and Zeng, Zheni and Sun, Maosong},
+  journal={arXiv preprint arXiv:2610.11816},
+  year={2026}
 }
 ```
